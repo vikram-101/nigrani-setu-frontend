@@ -214,12 +214,6 @@ function AuthScreen({ role, onBack, onAuthed }) {
             {loading && <Loader2 size={15} className="animate-spin" />}
             {mode === "login" ? "Sign in" : "Create account & continue"}
           </button>
-
-          <p className="text-xs text-slate-400 mt-4 leading-relaxed">
-            {role === "inspector" && "Signing up here calls /auth/signup/inspector — the backend tags this account role=inspector at creation, which is what the JWT and every API check rely on afterward."}
-            {role === "department" && "Signing up here calls /auth/signup/department, tagging the account for read-only monitoring access."}
-            {role === "admin" && "Uses /auth/login only — admin accounts are created directly against the backend, not from this screen."}
-          </p>
         </div>
       </div>
     </div>
@@ -527,6 +521,13 @@ function DepartmentDashboard({ account, token, onLogout }) {
                   <div className="bg-stone-50 rounded-xl p-3"><p className="text-xs text-slate-400 mb-1">Claimed present</p><p className="text-xl font-semibold text-slate-900" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>{latestReport.beneficiaries_claimed}</p></div>
                   <div className="bg-stone-50 rounded-xl p-3"><p className="text-xs text-slate-400 mb-1">Reported present</p><p className={`text-xl font-semibold ${latestReport.status === "flagged" ? "text-red-600" : "text-slate-900"}`} style={{ fontFamily: "'Space Grotesk', sans-serif" }}>{latestReport.beneficiaries_present}</p></div>
                 </div>
+                {latestReport.distance_from_institute_meters != null && (
+                  <div className={`flex items-center gap-2 mt-3 text-xs rounded-lg px-3 py-2 ${latestReport.distance_from_institute_meters > 500 ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"}`}>
+                    <MapPin size={13} />
+                    Evidence captured {Math.round(latestReport.distance_from_institute_meters)}m from registered site
+                    {latestReport.distance_from_institute_meters > 500 ? " — outside 500m geofence" : " — within geofence"}
+                  </div>
+                )}
                 {latestReport.photo_url && (
                   <img src={`${API_BASE}${latestReport.photo_url}`} alt="Field evidence" className="mt-4 rounded-xl w-full max-h-56 object-cover border border-stone-200" />
                 )}
@@ -658,6 +659,8 @@ function AdminPanel({ account, token, onLogout }) {
   const [instLocation, setInstLocation] = useState("");
   const [instBeneficiaries, setInstBeneficiaries] = useState("");
   const [instRtsp, setInstRtsp] = useState("");
+  const [instLat, setInstLat] = useState("");
+  const [instLng, setInstLng] = useState("");
   const [inspName, setInspName] = useState("");
   const [inspDistrict, setInspDistrict] = useState("");
   const [lastAssignment, setLastAssignment] = useState(null);
@@ -681,9 +684,9 @@ function AdminPanel({ account, token, onLogout }) {
   async function addInstitute() {
     if (!instName || !instLocation || !instBeneficiaries) return;
     try {
-      const inst = await apiRequest("/institutes", { method: "POST", token, body: { name: instName, location: instLocation, beneficiaries: Number(instBeneficiaries), rtsp_url: instRtsp || null } });
+      const inst = await apiRequest("/institutes", { method: "POST", token, body: { name: instName, location: instLocation, beneficiaries: Number(instBeneficiaries), rtsp_url: instRtsp || null, latitude: instLat ? Number(instLat) : null, longitude: instLng ? Number(instLng) : null } });
       setInstitutes((prev) => [...prev, inst]);
-      setInstName(""); setInstLocation(""); setInstBeneficiaries(""); setInstRtsp("");
+      setInstName(""); setInstLocation(""); setInstBeneficiaries(""); setInstRtsp(""); setInstLat(""); setInstLng("");
     } catch (e) { setError(e.message); }
   }
 
@@ -718,7 +721,16 @@ function AdminPanel({ account, token, onLogout }) {
             <label className="block text-sm font-medium text-slate-700 mb-1.5">Registered beneficiaries</label>
             <input type="number" value={instBeneficiaries} onChange={(e) => setInstBeneficiaries(e.target.value)} className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-slate-900" placeholder="e.g. 50" />
             <label className="block text-sm font-medium text-slate-700 mb-1.5">CCTV source (RTSP URL, optional)</label>
-            <input value={instRtsp} onChange={(e) => setInstRtsp(e.target.value)} className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm mb-5 focus:outline-none focus:ring-2 focus:ring-slate-900" placeholder="rtsp://..." />
+            <input value={instRtsp} onChange={(e) => setInstRtsp(e.target.value)} className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-slate-900" placeholder="rtsp://..." />
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Registered GPS coordinates (for geo-tag verification)</label>
+            <div className="flex gap-2 mb-1">
+              <input value={instLat} onChange={(e) => setInstLat(e.target.value)} className="w-1/2 border border-stone-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900" placeholder="Latitude" />
+              <input value={instLng} onChange={(e) => setInstLng(e.target.value)} className="w-1/2 border border-stone-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900" placeholder="Longitude" />
+            </div>
+            <button type="button" onClick={() => navigator.geolocation?.getCurrentPosition((pos) => { setInstLat(pos.coords.latitude.toFixed(6)); setInstLng(pos.coords.longitude.toFixed(6)); })} className="text-xs text-slate-500 underline mb-5 hover:text-slate-800">
+              Use my current location (for testing)
+            </button>
+            <br />
             <button onClick={addInstitute} className="flex items-center gap-2 bg-slate-900 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800"><PlusCircle size={15} /> Add institute</button>
           </div>
           <div>
