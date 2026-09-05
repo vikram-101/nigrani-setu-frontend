@@ -3,7 +3,8 @@ import {
   ShieldCheck, LayoutDashboard, ClipboardList, History, Camera, MapPin,
   Building2, Video, PhoneCall, AlertTriangle, LogOut, ChevronRight,
   CheckCircle2, Clock, Users, FileWarning, PlusCircle, Shuffle,
-  Fingerprint, ArrowLeft, ArrowRight, Inbox, Settings as Settings2, Loader2
+  Fingerprint, ArrowLeft, ArrowRight, Inbox, Settings as Settings2, Loader2,
+  Menu, X
 } from "lucide-react";
 
 /* ---------------------------------------------------------
@@ -224,34 +225,63 @@ function AuthScreen({ role, onBack, onAuthed }) {
    SHELL
 --------------------------------------------------------- */
 function Shell({ title, subtitle, navItems, activePage, setActivePage, onLogout, children }) {
-  return (
-    <div className="min-h-screen bg-stone-100 flex" style={{ fontFamily: "'Inter', sans-serif" }}>
-      <aside className="w-60 bg-slate-900 text-slate-300 flex flex-col shrink-0">
-        <div className="flex items-center gap-2 px-5 py-5 border-b border-slate-800">
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  const sidebarContent = (
+    <>
+      <div className="flex items-center justify-between px-5 py-5 border-b border-slate-800">
+        <div className="flex items-center gap-2">
           <ShieldCheck size={20} color="#E8A33D" />
           <span className="text-white font-semibold text-sm tracking-wide" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>Nigrani Setu</span>
         </div>
-        <nav className="flex-1 py-4 px-3 flex flex-col gap-1">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const active = activePage === item.id;
-            return (
-              <button key={item.id} onClick={() => setActivePage(item.id)} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors text-left ${active ? "bg-slate-800 text-white" : "hover:bg-slate-800/60 text-slate-400"}`}>
-                <Icon size={16} color={active ? "#E8A33D" : "#94a3b8"} />{item.label}
-              </button>
-            );
-          })}
-        </nav>
-        <div className="px-3 pb-4">
-          <button onClick={onLogout} className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-slate-400 hover:bg-slate-800/60 w-full"><LogOut size={16} /> Log out</button>
-        </div>
+        <button onClick={() => setMobileNavOpen(false)} className="md:hidden text-slate-400"><X size={20} /></button>
+      </div>
+      <nav className="flex-1 py-4 px-3 flex flex-col gap-1">
+        {navItems.map((item) => {
+          const Icon = item.icon;
+          const active = activePage === item.id;
+          return (
+            <button key={item.id} onClick={() => { setActivePage(item.id); setMobileNavOpen(false); }} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors text-left ${active ? "bg-slate-800 text-white" : "hover:bg-slate-800/60 text-slate-400"}`}>
+              <Icon size={16} color={active ? "#E8A33D" : "#94a3b8"} />{item.label}
+            </button>
+          );
+        })}
+      </nav>
+      <div className="px-3 pb-4">
+        <button onClick={onLogout} className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-slate-400 hover:bg-slate-800/60 w-full"><LogOut size={16} /> Log out</button>
+      </div>
+    </>
+  );
+
+  return (
+    <div className="min-h-screen bg-stone-100 flex" style={{ fontFamily: "'Inter', sans-serif" }}>
+      {/* Desktop sidebar — always visible from md breakpoint up */}
+      <aside className="hidden md:flex w-60 bg-slate-900 text-slate-300 flex-col shrink-0">
+        {sidebarContent}
       </aside>
+
+      {/* Mobile sidebar — slides in as an overlay, only rendered when open */}
+      {mobileNavOpen && (
+        <div className="fixed inset-0 z-50 md:hidden">
+          <div className="absolute inset-0 bg-slate-900/50" onClick={() => setMobileNavOpen(false)} />
+          <aside className="absolute inset-y-0 left-0 w-64 bg-slate-900 text-slate-300 flex flex-col">
+            {sidebarContent}
+          </aside>
+        </div>
+      )}
+
       <main className="flex-1 min-w-0">
-        <header className="h-16 bg-white border-b border-stone-200 flex items-center justify-between px-8">
-          <div><h2 className="text-lg font-semibold text-slate-900" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>{title}</h2>{subtitle && <p className="text-xs text-slate-400">{subtitle}</p>}</div>
-          <TopClock />
+        <header className="h-16 bg-white border-b border-stone-200 flex items-center justify-between px-4 md:px-8 gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <button onClick={() => setMobileNavOpen(true)} className="md:hidden text-slate-500 shrink-0"><Menu size={22} /></button>
+            <div className="min-w-0">
+              <h2 className="text-base md:text-lg font-semibold text-slate-900 truncate" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>{title}</h2>
+              {subtitle && <p className="text-xs text-slate-400 truncate">{subtitle}</p>}
+            </div>
+          </div>
+          <div className="hidden sm:block shrink-0"><TopClock /></div>
         </header>
-        <div className="p-8">{children}</div>
+        <div className="p-4 md:p-8">{children}</div>
       </main>
     </div>
   );
@@ -508,7 +538,7 @@ function DepartmentDashboard({ account, token, onLogout }) {
     return (
       <Shell title={selectedInstitute.name} subtitle={`Signed in as ${account.name}`} navItems={navItems} activePage={page} setActivePage={(p) => { setSelectedId(null); setPage(p); }} onLogout={onLogout}>
         <button onClick={() => setSelectedId(null)} className="flex items-center gap-1 text-sm text-slate-500 mb-5 hover:text-slate-800"><ArrowLeft size={14} /> Back to institutes</button>
-        <div className="grid grid-cols-3 gap-5 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
           <div className="col-span-2 bg-white rounded-2xl border border-stone-200 p-5">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Latest inspection report</h3>
@@ -517,7 +547,7 @@ function DepartmentDashboard({ account, token, onLogout }) {
             {latestReport ? (
               <>
                 <AuditTag>{latestReport.id} · {latestReport.inspector_name} · {new Date(latestReport.submitted_at).toLocaleString("en-IN")}</AuditTag>
-                <div className="grid grid-cols-2 gap-4 mt-4">
+                <div className="grid grid-cols-2 gap-3 mt-4">
                   <div className="bg-stone-50 rounded-xl p-3"><p className="text-xs text-slate-400 mb-1">Claimed present</p><p className="text-xl font-semibold text-slate-900" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>{latestReport.beneficiaries_claimed}</p></div>
                   <div className="bg-stone-50 rounded-xl p-3"><p className="text-xs text-slate-400 mb-1">Reported present</p><p className={`text-xl font-semibold ${latestReport.status === "flagged" ? "text-red-600" : "text-slate-900"}`} style={{ fontFamily: "'Space Grotesk', sans-serif" }}>{latestReport.beneficiaries_present}</p></div>
                 </div>
@@ -541,7 +571,7 @@ function DepartmentDashboard({ account, token, onLogout }) {
             </p>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-5">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div className="bg-white rounded-2xl border border-stone-200 p-5">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Live CCTV feed</h3>
@@ -576,7 +606,7 @@ function DepartmentDashboard({ account, token, onLogout }) {
       <ErrorBanner message={error} />
       {page === "overview" && (
         <div>
-          <div className="grid grid-cols-4 gap-4 mb-8">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
             {[
               { label: "Total reports", value: reports.length, icon: ClipboardList },
               { label: "Institutes registered", value: institutes.length, icon: Building2 },
@@ -610,7 +640,7 @@ function DepartmentDashboard({ account, token, onLogout }) {
         <div>
           <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Registered institutes</h3>
           {institutes.length === 0 ? <EmptyState icon={Building2} title="No institutes registered yet" sub="Ask an Admin to register an institute before inspections can be assigned." /> : (
-            <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden">
+            <div className="bg-white rounded-2xl border border-stone-200 overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-stone-50 text-slate-400 text-xs uppercase tracking-wider"><tr><th className="text-left px-5 py-3 font-medium">Institute</th><th className="text-left px-5 py-3 font-medium">Location</th><th className="text-left px-5 py-3 font-medium">Beneficiaries</th><th className="px-5 py-3"></th></tr></thead>
                 <tbody>
@@ -711,7 +741,7 @@ function AdminPanel({ account, token, onLogout }) {
     <Shell title="Admin Panel" subtitle={`Signed in as ${account.name}`} navItems={navItems} activePage={page} setActivePage={setPage} onLogout={onLogout}>
       <ErrorBanner message={error} />
       {page === "institutes" && (
-        <div className="grid grid-cols-2 gap-6 max-w-4xl">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl">
           <div className="bg-white rounded-2xl border border-stone-200 p-6">
             <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4">Register new institute</h3>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">Institute name</label>
@@ -742,7 +772,7 @@ function AdminPanel({ account, token, onLogout }) {
         </div>
       )}
       {page === "inspectors" && (
-        <div className="grid grid-cols-2 gap-6 max-w-4xl">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl">
           <div className="bg-white rounded-2xl border border-stone-200 p-6">
             <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4">Register new inspector</h3>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">Full name</label>
@@ -792,10 +822,36 @@ export default function App() {
   const [role, setRole] = useState(null);
   const [account, setAccount] = useState(null);
   const [token, setToken] = useState(null);
+  const [checkedStorage, setCheckedStorage] = useState(false);
+
+  // On first load, restore a saved session so refreshing the page (or
+  // reopening the site on a phone) doesn't force a fresh login every time.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("nigrani_session");
+      if (saved) {
+        const { role: savedRole, account: savedAccount, token: savedToken } = JSON.parse(saved);
+        if (savedRole && savedAccount && savedToken) {
+          setRole(savedRole); setAccount(savedAccount); setToken(savedToken); setView("app");
+        }
+      }
+    } catch (_) { /* ignore corrupted storage */ }
+    setCheckedStorage(true);
+  }, []);
 
   function enterPortal(r) { setRole(r); setView("auth"); }
-  function handleAuthed(acc, tok) { setAccount(acc); setToken(tok); setView("app"); }
-  function handleLogout() { setAccount(null); setToken(null); setRole(null); setView("landing"); }
+  function handleAuthed(acc, tok) {
+    setAccount(acc); setToken(tok); setView("app");
+    localStorage.setItem("nigrani_session", JSON.stringify({ role, account: acc, token: tok }));
+  }
+  function handleLogout() {
+    setAccount(null); setToken(null); setRole(null); setView("landing");
+    localStorage.removeItem("nigrani_session");
+  }
+
+  // Wait one tick for the storage check so a logged-in user doesn't flash
+  // the landing page for a split second on every refresh.
+  if (!checkedStorage) return null;
 
   return (
     <div>
