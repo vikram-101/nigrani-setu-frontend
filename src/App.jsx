@@ -288,7 +288,204 @@ function Shell({ title, subtitle, navItems, activePage, setActivePage, onLogout,
 }
 
 /* ---------------------------------------------------------
+   GEOTAG HELPERS
+   Burns location + date/time onto a captured photo using canvas.
+   Video cannot be burned client-side without ffmpeg, so video gets
+   a CSS overlay in preview and the raw coords sent to the backend
+   for it to stamp/verify server-side if needed.
+--------------------------------------------------------- */
+function formatCoords(coords) {
+  if (!coords) return "Location unavailable";
+  return `Lat ${coords.lat.toFixed(5)}, Lng ${coords.lng.toFixed(5)}`;
+}
+
+function stampPhoto(file, coords) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+
+      const stripHeight = Math.round(img.height * 0.14);
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillRect(0, img.height - stripHeight, img.width, stripHeight);
+
+      const now = new Date();
+      const dateStr = now.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+      const timeStr = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+
+      const fontSize = Math.max(14, Math.round(img.width * 0.022));
+      ctx.fillStyle = "#ffffff";
+      ctx.font = `600 ${fontSize}px sans-serif`;
+      ctx.fillText(`📍 ${formatCoords(coords)}`, img.width * 0.03, img.height - stripHeight * 0.55);
+      ctx.font = `400 ${Math.round(fontSize * 0.85)}px sans-serif`;
+      ctx.fillText(`${dateStr}  •  ${timeStr}  •  Nigrani Setu Verified`, img.width * 0.03, img.height - stripHeight * 0.2);
+
+      canvas.toBlob((blob) => {
+        if (!blob) { reject(new Error("Could not process photo")); return; }
+        resolve(new File([blob], file.name.replace(/\.[^.]+$/, "") + "_geotagged.jpg", { type: "image/jpeg" }));
+      }, "image/jpeg", 0.92);
+    };
+    img.onerror = () => reject(new Error("Could not load captured photo"));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+function getCurrentPosition() {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) { resolve(null); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => resolve(null)
+    );
+  });
+}
+
+/* ---------------------------------------------------------
+   LIVE CAMERA CAPTURE
+   Opens the device camera as a live stream (getUserMedia) — NOT a
+   file picker — so the user can only capture what the camera sees
+   right now. No gallery upload is possible. The geotag is burned
+   onto the frame at the exact instant the shutter is pressed.
+--------------------------------------------------------- */
+function LiveCameraCapture({ mode, coords, onCapture, onClose }) {
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const recorderRef = useRef(null);
+  const chunksRef = useRef([]);
+  const [ready, setReady] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" },
+          audio: mode === "video",
+        });
+        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+        setReady(true);
+      } catch (e) {
+        setErr("Camera permission denied or no camera available. Please allow camera access in your browser settings.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, [mode]);
+
+  function stopStream() {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+  }
+
+  function capturePhoto() {
+    const video = videoRef.current;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0, 0);
+
+    const stripHeight = Math.round(canvas.height * 0.14);
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(0, canvas.height - stripHeight, canvas.width, stripHeight);
+
+    const now = new Date();
+    const dateStr = now.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+    const timeStr = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+    const fontSize = Math.max(14, Math.round(canvas.width * 0.022));
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `600 ${fontSize}px sans-serif`;
+    ctx.fillText(`📍 ${formatCoords(coords)}`, canvas.width * 0.03, canvas.height - stripHeight * 0.55);
+    ctx.font = `400 ${Math.round(fontSize * 0.85)}px sans-serif`;
+    ctx.fillText(`${dateStr}  •  ${timeStr}  •  Nigrani Setu Live Capture`, canvas.width * 0.03, canvas.height - stripHeight * 0.2);
+
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const file = new File([blob], `capture_${Date.now()}.jpg`, { type: "image/jpeg" });
+      stopStream();
+      onCapture(file, "image");
+    }, "image/jpeg", 0.92);
+  }
+
+  function startRecording() {
+    chunksRef.current = [];
+    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9") ? "video/webm;codecs=vp9" : "video/webm";
+    const rec = new MediaRecorder(streamRef.current, { mimeType });
+    rec.ondataavailable = (e) => { if (e.data.size) chunksRef.current.push(e.data); };
+    rec.onstop = () => {
+      const blob = new Blob(chunksRef.current, { type: mimeType });
+      const file = new File([blob], `capture_${Date.now()}.webm`, { type: mimeType });
+      stopStream();
+      onCapture(file, "video");
+    };
+    recorderRef.current = rec;
+    rec.start();
+    setRecording(true);
+  }
+
+  function stopRecording() {
+    recorderRef.current?.stop();
+    setRecording(false);
+  }
+
+  function handleClose() {
+    if (recording) stopRecording();
+    stopStream();
+    onClose();
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black z-50 flex flex-col">
+      <div className="flex-1 relative overflow-hidden">
+        <video ref={videoRef} playsInline muted className="w-full h-full object-cover" />
+        {!ready && !err && (
+          <div className="absolute inset-0 flex items-center justify-center gap-2 text-white text-sm">
+            <Loader2 size={18} className="animate-spin" /> Opening live camera…
+          </div>
+        )}
+        {err && (
+          <div className="absolute inset-0 flex items-center justify-center text-red-400 text-sm px-8 text-center">{err}</div>
+        )}
+        {ready && (
+          <div className="absolute bottom-4 left-0 right-0 text-center text-white text-[11px] px-4" style={{ fontFamily: "'JetBrains Mono', monospace", textShadow: "0 1px 3px rgba(0,0,0,0.8)" }}>
+            📍 {formatCoords(coords)}
+            {recording && <span className="ml-2 text-red-400">● REC</span>}
+          </div>
+        )}
+      </div>
+      <div className="bg-black py-6 flex items-center justify-center gap-10">
+        <button onClick={handleClose} className="text-white text-sm w-14">Cancel</button>
+        {mode === "photo" ? (
+          <button onClick={capturePhoto} disabled={!ready} className="w-16 h-16 rounded-full bg-white border-4 border-slate-400 disabled:opacity-30" aria-label="Capture photo" />
+        ) : recording ? (
+          <button onClick={stopRecording} className="w-16 h-16 rounded-full bg-red-600 flex items-center justify-center" aria-label="Stop recording"><div className="w-6 h-6 bg-white rounded-sm" /></button>
+        ) : (
+          <button onClick={startRecording} disabled={!ready} className="w-16 h-16 rounded-full bg-red-600 border-4 border-red-400 disabled:opacity-30" aria-label="Start recording" />
+        )}
+        <div className="w-14" />
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
    INSPECTOR PORTAL — real API calls
+   Uses LiveCameraCapture for true live photo/video capture (no
+   file upload / gallery picker possible). Geotag is burned onto
+   the photo at the instant of capture; video carries the same
+   coordinates recorded live alongside it.
 --------------------------------------------------------- */
 function InspectorPortal({ account, token, onLogout }) {
   const [page, setPage] = useState("home");
@@ -301,11 +498,16 @@ function InspectorPortal({ account, token, onLogout }) {
   const [attendance, setAttendance] = useState(null);
   const [hygiene, setHygiene] = useState("Good");
   const [notes, setNotes] = useState("");
-  const [photoFile, setPhotoFile] = useState(null);
-  const [photoPreview, setPhotoPreview] = useState(null);
+
+  // Media state — generalized to handle both photo and video
+  const [mediaFile, setMediaFile] = useState(null);
+  const [mediaPreview, setMediaPreview] = useState(null);
+  const [mediaType, setMediaType] = useState(null); // "image" | "video"
   const [coords, setCoords] = useState(null);
+  const [capturing, setCapturing] = useState(false);
+  const [cameraMode, setCameraMode] = useState(null); // null | "photo" | "video" — controls the live camera modal
+
   const [submitting, setSubmitting] = useState(false);
-  const fileInputRef = useRef(null);
 
   const navItems = [
     { id: "home", label: "Home", icon: LayoutDashboard },
@@ -330,17 +532,32 @@ function InspectorPortal({ account, token, onLogout }) {
   useEffect(() => { loadAssignment(); }, [loadAssignment]);
   useEffect(() => { if (page === "history") loadHistory(); }, [page, loadHistory]);
 
-  function handleCapture(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setPhotoFile(file);
-    setPhotoPreview(URL.createObjectURL(file));
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-        () => setCoords(null)
-      );
+  // Opens the live camera modal. GPS is fetched first so the modal can
+  // show/burn the correct coordinates the moment the shutter is pressed.
+  async function openCamera(mode) {
+    setError("");
+    setCapturing(true);
+    const pos = await getCurrentPosition();
+    setCoords(pos);
+    setCapturing(false);
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError("Live camera is not supported in this browser. Please use a modern mobile browser (Chrome/Safari) over HTTPS.");
+      return;
     }
+    setCameraMode(mode);
+  }
+
+  // Called by LiveCameraCapture once the user actually presses capture —
+  // this is real live camera output, never a gallery file.
+  function handleCameraCapture(file, type) {
+    setMediaFile(file);
+    setMediaPreview(URL.createObjectURL(file));
+    setMediaType(type);
+    setCameraMode(null);
+  }
+
+  function clearMedia() {
+    setMediaFile(null); setMediaPreview(null); setMediaType(null); setCoords(null);
   }
 
   async function handleSubmit() {
@@ -353,7 +570,10 @@ function InspectorPortal({ account, token, onLogout }) {
       form.append("hygiene", hygiene);
       form.append("notes", notes || "");
       if (coords) { form.append("latitude", coords.lat); form.append("longitude", coords.lng); }
-      form.append("photo", photoFile);
+      form.append("media_type", mediaType || "image");
+      // Field name kept as "photo" for backend compatibility — update
+      // your FastAPI endpoint to also accept video/* content types here.
+      form.append("photo", mediaFile);
 
       const report = await apiRequest("/reports", { method: "POST", token, body: form, isForm: true });
       setSubmitted(report);
@@ -366,8 +586,8 @@ function InspectorPortal({ account, token, onLogout }) {
   }
 
   function resetForm() {
-    setPage("home"); setSubmitted(null); setPhotoFile(null); setPhotoPreview(null);
-    setCoords(null); setBeneficiariesPresent(""); setAttendance(null); setNotes("");
+    setPage("home"); setSubmitted(null); clearMedia();
+    setBeneficiariesPresent(""); setAttendance(null); setNotes("");
   }
 
   return (
@@ -427,31 +647,67 @@ function InspectorPortal({ account, token, onLogout }) {
             </div>
 
             <div className="mb-6">
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">Evidence capture</label>
-              <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={handleCapture} className="hidden" />
-              <button onClick={() => fileInputRef.current?.click()} className={`w-full border-2 border-dashed rounded-xl py-8 flex flex-col items-center gap-2 transition-colors overflow-hidden ${photoFile ? "border-emerald-400 bg-emerald-50" : "border-stone-300 hover:border-slate-500"}`}>
-                {photoFile ? (
-                  <>
-                    <img src={photoPreview} alt="captured" className="h-20 rounded-lg object-cover" />
-                    <span className="text-sm text-emerald-700 font-medium flex items-center gap-1"><CheckCircle2 size={15} /> Photo captured</span>
-                  </>
-                ) : (<><Camera size={22} className="text-slate-400" /><span className="text-sm text-slate-500">Open camera to capture photo</span></>)}
-              </button>
-              {photoFile && (
-                <div className="flex items-center gap-2 mt-2 text-slate-500">
-                  <MapPin size={13} />
-                  <AuditTag>{coords ? `${coords.lat.toFixed(4)}°, ${coords.lng.toFixed(4)}°` : "Location unavailable — enable permission"}</AuditTag>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">Evidence capture (live camera, geo-tagged)</label>
+
+              {!mediaFile && (
+                <div className="flex gap-3">
+                  <button type="button" onClick={() => openCamera("photo")} disabled={capturing}
+                    className="flex-1 border-2 border-dashed border-stone-300 hover:border-slate-500 rounded-xl py-7 flex flex-col items-center gap-2 transition-colors disabled:opacity-50">
+                    <Camera size={22} className="text-slate-400" />
+                    <span className="text-sm text-slate-500">Open Camera — Photo</span>
+                  </button>
+                  <button type="button" onClick={() => openCamera("video")} disabled={capturing}
+                    className="flex-1 border-2 border-dashed border-stone-300 hover:border-slate-500 rounded-xl py-7 flex flex-col items-center gap-2 transition-colors disabled:opacity-50">
+                    <Video size={22} className="text-slate-400" />
+                    <span className="text-sm text-slate-500">Open Camera — Video</span>
+                  </button>
                 </div>
               )}
-              <p className="text-xs text-slate-400 mt-1">This opens your device camera directly (no gallery picker) so the photo and geo-tag stay authentic.</p>
+
+              {capturing && (
+                <div className="flex items-center gap-2 mt-3 text-slate-400 text-sm">
+                  <Loader2 size={15} className="animate-spin" /> Getting your location…
+                </div>
+              )}
+
+              {mediaFile && !capturing && (
+                <div className="border-2 border-emerald-400 bg-emerald-50 rounded-xl p-3">
+                  <div className="relative rounded-lg overflow-hidden">
+                    {mediaType === "video" ? (
+                      <>
+                        <video src={mediaPreview} controls className="w-full rounded-lg max-h-64 bg-black" />
+                        <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-[11px] px-3 py-2" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+                          📍 {formatCoords(coords)}
+                          <br />
+                          {new Date().toLocaleString("en-IN")} · Nigrani Setu Verified
+                        </div>
+                      </>
+                    ) : (
+                      <img src={mediaPreview} alt="Geotagged evidence" className="w-full rounded-lg max-h-64 object-cover" />
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between mt-2">
+                    <span className="text-sm text-emerald-700 font-medium flex items-center gap-1">
+                      <CheckCircle2 size={15} /> {mediaType === "video" ? "Video captured" : "Photo captured & geotagged"}
+                    </span>
+                    <button type="button" onClick={clearMedia} className="text-xs text-slate-500 underline hover:text-slate-800">Retake</button>
+                  </div>
+                </div>
+              )}
+
+              <p className="text-xs text-slate-400 mt-2">This opens a live camera stream in the browser — there is no gallery or file picker, so an old or borrowed photo can never be submitted. The geotag is burned onto the photo at the exact moment of capture; video carries the same coordinates recorded live.</p>
             </div>
 
-            <button onClick={handleSubmit} disabled={!photoFile || !beneficiariesPresent || !attendance || submitting}
-              className={`w-full flex items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-medium ${photoFile && beneficiariesPresent && attendance && !submitting ? "bg-slate-900 text-white hover:bg-slate-800" : "bg-stone-200 text-stone-400 cursor-not-allowed"}`}>
+            <button onClick={handleSubmit} disabled={!mediaFile || !beneficiariesPresent || !attendance || submitting}
+              className={`w-full flex items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-medium ${mediaFile && beneficiariesPresent && attendance && !submitting ? "bg-slate-900 text-white hover:bg-slate-800" : "bg-stone-200 text-stone-400 cursor-not-allowed"}`}>
               {submitting && <Loader2 size={15} className="animate-spin" />} Submit report
             </button>
           </div>
         </div>
+      )}
+
+      {cameraMode && (
+        <LiveCameraCapture mode={cameraMode} coords={coords} onCapture={handleCameraCapture} onClose={() => setCameraMode(null)} />
       )}
 
       {page === "form" && submitted && (
@@ -538,6 +794,7 @@ function DepartmentDashboard({ account, token, onLogout }) {
     return (
       <Shell title={selectedInstitute.name} subtitle={`Signed in as ${account.name}`} navItems={navItems} activePage={page} setActivePage={(p) => { setSelectedId(null); setPage(p); }} onLogout={onLogout}>
         <button onClick={() => setSelectedId(null)} className="flex items-center gap-1 text-sm text-slate-500 mb-5 hover:text-slate-800"><ArrowLeft size={14} /> Back to institutes</button>
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
           <div className="col-span-2 bg-white rounded-2xl border border-stone-200 p-5">
             <div className="flex items-center justify-between mb-3">
@@ -559,7 +816,19 @@ function DepartmentDashboard({ account, token, onLogout }) {
                   </div>
                 )}
                 {latestReport.photo_url && (
-                  <img src={`${API_BASE}${latestReport.photo_url}`} alt="Field evidence" className="mt-4 rounded-xl w-full max-h-56 object-cover border border-stone-200" />
+                  latestReport.media_type === "video" ? (
+                    <video
+                      src={latestReport.photo_url.startsWith("data:") ? latestReport.photo_url : `${API_BASE}${latestReport.photo_url}`}
+                      controls
+                      className="mt-4 rounded-xl w-full max-h-56 border border-stone-200 bg-black"
+                    />
+                  ) : (
+                    <img
+                      src={latestReport.photo_url.startsWith("data:") ? latestReport.photo_url : `${API_BASE}${latestReport.photo_url}`}
+                      alt="Field evidence"
+                      className="mt-4 rounded-xl w-full max-h-56 object-cover border border-stone-200"
+                    />
+                  )
                 )}
               </>
             ) : <EmptyState icon={Inbox} title="No inspection filed for this institute yet" />}
@@ -571,22 +840,13 @@ function DepartmentDashboard({ account, token, onLogout }) {
             </p>
           </div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <div className="bg-white rounded-2xl border border-stone-200 p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Live CCTV feed</h3>
-              {selectedInstitute.rtsp_url ? <span className="flex items-center gap-1.5 text-xs text-red-600 font-medium"><span className="w-1.5 h-1.5 rounded-full bg-red-600 animate-pulse" /> LIVE</span> : <span className="text-xs text-slate-400">Not configured</span>}
-            </div>
-            {selectedInstitute.rtsp_url ? (
-              <div className="aspect-video bg-slate-900 rounded-xl flex flex-col items-center justify-center text-slate-500 gap-2"><Video size={26} /><span className="text-xs" style={{ fontFamily: "'JetBrains Mono', monospace" }}>{selectedInstitute.rtsp_url}</span></div>
-            ) : <EmptyState icon={Video} title="No CCTV source registered" sub="Ask Admin to add an RTSP URL for this institute." />}
-          </div>
-          <div className="bg-white rounded-2xl border border-stone-200 p-5">
-            <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Direct verification</h3>
-            <p className="text-sm text-slate-600 mb-4">Call a randomly selected beneficiary or staff member to confirm the service is real.</p>
-            <button onClick={() => setVcOpen(true)} className="flex items-center justify-center gap-2 w-full bg-slate-900 text-white rounded-lg py-2.5 text-sm font-medium hover:bg-slate-800"><PhoneCall size={15} /> Call a random beneficiary</button>
-          </div>
+
+        <div className="bg-white rounded-2xl border border-stone-200 p-5 max-w-lg">
+          <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Direct verification</h3>
+          <p className="text-sm text-slate-600 mb-4">Call a randomly selected beneficiary or staff member to confirm the service is real.</p>
+          <button onClick={() => setVcOpen(true)} className="flex items-center justify-center gap-2 w-full bg-slate-900 text-white rounded-lg py-2.5 text-sm font-medium hover:bg-slate-800"><PhoneCall size={15} /> Call a random beneficiary</button>
         </div>
+
         {vcOpen && (
           <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50">
             <div className="bg-white rounded-2xl p-6 w-full max-w-sm text-center">
@@ -685,14 +945,16 @@ function AdminPanel({ account, token, onLogout }) {
   const [institutes, setInstitutes] = useState([]);
   const [inspectors, setInspectors] = useState([]);
   const [error, setError] = useState("");
+
   const [instName, setInstName] = useState("");
   const [instLocation, setInstLocation] = useState("");
   const [instBeneficiaries, setInstBeneficiaries] = useState("");
-  const [instRtsp, setInstRtsp] = useState("");
   const [instLat, setInstLat] = useState("");
   const [instLng, setInstLng] = useState("");
+
   const [inspName, setInspName] = useState("");
   const [inspDistrict, setInspDistrict] = useState("");
+
   const [lastAssignment, setLastAssignment] = useState(null);
   const [drawing, setDrawing] = useState(false);
 
@@ -714,9 +976,9 @@ function AdminPanel({ account, token, onLogout }) {
   async function addInstitute() {
     if (!instName || !instLocation || !instBeneficiaries) return;
     try {
-      const inst = await apiRequest("/institutes", { method: "POST", token, body: { name: instName, location: instLocation, beneficiaries: Number(instBeneficiaries), rtsp_url: instRtsp || null, latitude: instLat ? Number(instLat) : null, longitude: instLng ? Number(instLng) : null } });
+      const inst = await apiRequest("/institutes", { method: "POST", token, body: { name: instName, location: instLocation, beneficiaries: Number(instBeneficiaries), latitude: instLat ? Number(instLat) : null, longitude: instLng ? Number(instLng) : null } });
       setInstitutes((prev) => [...prev, inst]);
-      setInstName(""); setInstLocation(""); setInstBeneficiaries(""); setInstRtsp(""); setInstLat(""); setInstLng("");
+      setInstName(""); setInstLocation(""); setInstBeneficiaries(""); setInstLat(""); setInstLng("");
     } catch (e) { setError(e.message); }
   }
 
@@ -750,8 +1012,6 @@ function AdminPanel({ account, token, onLogout }) {
             <input value={instLocation} onChange={(e) => setInstLocation(e.target.value)} className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-slate-900" placeholder="District, State" />
             <label className="block text-sm font-medium text-slate-700 mb-1.5">Registered beneficiaries</label>
             <input type="number" value={instBeneficiaries} onChange={(e) => setInstBeneficiaries(e.target.value)} className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-slate-900" placeholder="e.g. 50" />
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">CCTV source (RTSP URL, optional)</label>
-            <input value={instRtsp} onChange={(e) => setInstRtsp(e.target.value)} className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-slate-900" placeholder="rtsp://..." />
             <label className="block text-sm font-medium text-slate-700 mb-1.5">Registered GPS coordinates (for geo-tag verification)</label>
             <div className="flex gap-2 mb-1">
               <input value={instLat} onChange={(e) => setInstLat(e.target.value)} className="w-1/2 border border-stone-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900" placeholder="Latitude" />
@@ -824,11 +1084,16 @@ export default function App() {
   const [token, setToken] = useState(null);
   const [checkedStorage, setCheckedStorage] = useState(false);
 
-  // On first load, restore a saved session so refreshing the page (or
-  // reopening the site on a phone) doesn't force a fresh login every time.
+  // On first load, restore a saved session so refreshing the page doesn't
+  // force a fresh login every time. sessionStorage (NOT localStorage) is
+  // used deliberately — it is isolated per browser TAB. With localStorage,
+  // opening Admin / Inspector / Department in three tabs of the same
+  // browser (exactly what the demo does) would make every tab share one
+  // session, so logging into a second tab would silently overwrite and
+  // "mix up" the session in the first tab on its next refresh.
   useEffect(() => {
     try {
-      const saved = localStorage.getItem("nigrani_session");
+      const saved = sessionStorage.getItem("nigrani_session");
       if (saved) {
         const { role: savedRole, account: savedAccount, token: savedToken } = JSON.parse(saved);
         if (savedRole && savedAccount && savedToken) {
@@ -842,11 +1107,11 @@ export default function App() {
   function enterPortal(r) { setRole(r); setView("auth"); }
   function handleAuthed(acc, tok) {
     setAccount(acc); setToken(tok); setView("app");
-    localStorage.setItem("nigrani_session", JSON.stringify({ role, account: acc, token: tok }));
+    sessionStorage.setItem("nigrani_session", JSON.stringify({ role, account: acc, token: tok }));
   }
   function handleLogout() {
     setAccount(null); setToken(null); setRole(null); setView("landing");
-    localStorage.removeItem("nigrani_session");
+    sessionStorage.removeItem("nigrani_session");
   }
 
   // Wait one tick for the storage check so a logged-in user doesn't flash
