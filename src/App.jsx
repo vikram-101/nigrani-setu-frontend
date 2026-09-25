@@ -150,6 +150,20 @@ function AuthScreen({ role, onBack, onAuthed }) {
         ? { login_id: loginId, password }
         : { name, login_id: loginId, password, district: role === "inspector" ? district : undefined, division: role === "department" ? division : undefined };
       const data = await apiRequest(path, { method: "POST", body });
+
+      // The backend's /auth/login only checks the ID + password — it has
+      // no idea which of the three portal screens the person typed them
+      // into. Without this check, an Admin's correct credentials entered
+      // on the Inspector login screen would be accepted and silently open
+      // the Inspector Portal using the Admin's account. We only ever let
+      // someone in if the account's real role matches the portal they're
+      // signing into.
+      if (data.user.role !== role) {
+        const roleLabel = { inspector: "an Inspector", department: "a Department Official", admin: "an Admin" }[data.user.role] || data.user.role;
+        setError(`This ID belongs to ${roleLabel} account. Please use the ${roleMeta.title} portal's own login, or the correct portal for this ID.`);
+        return;
+      }
+
       onAuthed(data.user, data.access_token);
     } catch (e) {
       setError(e.message || "Could not reach the server — is the backend running?");
